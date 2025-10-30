@@ -1,28 +1,33 @@
-name: Deploy to ECS (st / prod)
+name: Deploy to ECS (st / prod, OIDC)
 
 on:
   push:
     branches:
-      - main
-      - staging
+      - main      # 本番
+      - staging   # ステージング
   workflow_dispatch:
 
 env:
   AWS_REGION: ap-northeast-1
-  TASK_CPU: 512
-  TASK_MEMORY: 2048
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    permissions:
+      id-token: write      # OIDC認証に必須
+      contents: read
+
     steps:
+      # ===========================================
+      # 1️⃣ ソースチェックアウト
+      # ===========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ==============================
-      # 1️⃣ 環境設定
-      # ==============================
+      # ===========================================
+      # 2️⃣ デプロイ環境を設定
+      # ===========================================
       - name: Set environment (staging or prod)
         id: set-env
         run: |
@@ -31,31 +36,32 @@ jobs:
             echo "AWS_ACCOUNT_ID=389759593235" >> $GITHUB_ENV
             echo "ECS_CLUSTER=stage-cluster" >> $GITHUB_ENV
             echo "ECS_SERVICE=stage-service" >> $GITHUB_ENV
+            echo "ROLE_ARN=arn:aws:iam::389759593235:role/github-actions-ecs-deploy-role" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
             echo "AWS_ACCOUNT_ID=550733172573" >> $GITHUB_ENV
             echo "ECS_CLUSTER=prod-cluster" >> $GITHUB_ENV
             echo "ECS_SERVICE=prod-service" >> $GITHUB_ENV
+            echo "ROLE_ARN=arn:aws:iam::550733172573:role/github-actions-ecs-deploy-role" >> $GITHUB_ENV
           fi
 
-      # ==============================
-      # 2️⃣ AWS 認証
-      # ==============================
-      - name: Configure AWS credentials
+      # ===========================================
+      # 3️⃣ AWS 認証（OIDC）
+      # ===========================================
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ==============================
-      # 3️⃣ Docker ビルド & Push to ECR
-      # ==============================
+      # ===========================================
+      # 4️⃣ ECR ログイン・イメージビルド & プッシュ
+      # ===========================================
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to ECR
+      - name: Build, tag, and push image
         run: |
           IMAGE_TAG=$(date +%Y%m%d%H%M%S)
           ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ENV}-ecr"
@@ -63,18 +69,18 @@ jobs:
           docker push ${ECR_REPO}:${IMAGE_TAG}
           echo "IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}" >> $GITHUB_ENV
 
-      # ==============================
-      # 4️⃣ タスク定義テンプレートの展開
-      # ==============================
-      - name: Generate task definition
+      # ===========================================
+      # 5️⃣ タスク定義テンプレートを展開
+      # ===========================================
+      - name: Render ECS task definition
         run: |
           envsubst < ecs-task-template.json > ecs-task.json
-          echo "Task definition generated:"
+          echo "Task definition rendered:"
           cat ecs-task.json
 
-      # ==============================
-      # 5️⃣ ECS タスク定義登録
-      # ==============================
+      # ===========================================
+      # 6️⃣ タスク定義を登録
+      # ===========================================
       - name: Register ECS task definition
         id: register-task
         run: |
@@ -85,9 +91,9 @@ jobs:
           echo "TASK_DEF_ARN=${TASK_DEF_ARN}" >> $GITHUB_ENV
           echo "Registered Task Definition: ${TASK_DEF_ARN}"
 
-      # ==============================
-      # 6️⃣ ECS サービス更新（デプロイ）
-      # ==============================
+      # ===========================================
+      # 7️⃣ サービスを更新（デプロイ）
+      # ===========================================
       - name: Update ECS service
         run: |
           aws ecs update-service \
@@ -96,9 +102,9 @@ jobs:
             --task-definition ${TASK_DEF_ARN} \
             --force-new-deployment
 
-      # ==============================
+      # ===========================================
       # ✅ 結果確認
-      # ==============================
+      # ===========================================
       - name: Describe ECS service
         run: |
           aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
