@@ -19,15 +19,11 @@ jobs:
       contents: read
 
     steps:
-      # =====================================
-      # 1️⃣ ソース取得
-      # =====================================
+      # 1) ソース取得
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # =====================================
-      # 2️⃣ 環境変数をブランチ別に設定
-      # =====================================
+      # 2) 環境判定（staging/main で切替）
       - name: Set environment (staging or prod)
         id: set-env
         run: |
@@ -45,23 +41,19 @@ jobs:
             echo "ROLE_ARN=arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
           fi
 
-      # =====================================
-      # 3️⃣ AWS認証（OIDC）
-      # =====================================
+      # 3) OIDCでAWS認証
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # =====================================
-      # 4️⃣ ECRログイン・イメージビルド＆プッシュ
-      # =====================================
+      # 4) ECRログイン & コンテナビルド/プッシュ
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push Docker image
+      - name: Build, tag, and push image
         run: |
           IMAGE_TAG=$(date +%Y%m%d%H%M%S)
           ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ENV}-ecr"
@@ -69,24 +61,18 @@ jobs:
           docker push ${ECR_REPO}:${IMAGE_TAG}
           echo "IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}" >> $GITHUB_ENV
 
-      # =====================================
-      # 5️⃣ envsubst のインストール
-      # =====================================
+      # 5) envsubst を用意（テンプレ展開で使用）
       - name: Install envsubst
         run: sudo apt-get update && sudo apt-get install -y gettext-base
 
-      # =====================================
-      # 6️⃣ タスク定義テンプレートを展開
-      # =====================================
+      # 6) タスク定義テンプレを展開（リポジトリ: task/task-definition.json）
       - name: Render ECS task definition
         run: |
           envsubst < task/task-definition.json > task/ecs-task.json
-          echo "Rendered task definition:"
+          echo "Task definition rendered:"
           cat task/ecs-task.json
 
-      # =====================================
-      # 7️⃣ タスク定義を登録
-      # =====================================
+      # 7) タスク定義を登録
       - name: Register ECS task definition
         id: register-task
         run: |
@@ -97,9 +83,7 @@ jobs:
           echo "TASK_DEF_ARN=${TASK_DEF_ARN}" >> $GITHUB_ENV
           echo "✅ Registered Task Definition: ${TASK_DEF_ARN}"
 
-      # =====================================
-      # 8️⃣ ECSサービスを更新（デプロイ実行）
-      # =====================================
+      # 8) サービス更新（強制デプロイ）
       - name: Update ECS service
         run: |
           aws ecs update-service \
@@ -109,10 +93,8 @@ jobs:
             --force-new-deployment
           echo "🚀 ECS service update triggered."
 
-      # =====================================
-      # 9️⃣ デプロイ安定化を確認
-      # =====================================
-      - name: Wait for ECS service stability
+      # 9) 安定化待ち（任意だが推奨）
+      - name: Wait for service stability
         run: |
           echo "⏳ Waiting for service to stabilize..."
           aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
