@@ -3,8 +3,8 @@ name: Deploy to ECS (st / prod, OIDC)
 on:
   push:
     branches:
-      - main      # 本番
-      - staging   # ステージング
+      - main      # 本番環境
+      - staging   # ステージング環境
   workflow_dispatch:
 
 env:
@@ -15,45 +15,53 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write   # OIDCに必須
+      id-token: write   # OIDC認証に必須
       contents: read
 
     steps:
-      # 1) ソース取得
+      # =====================================
+      # 1️⃣ ソース取得
+      # =====================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) 環境判定（staging/main で切替）
+      # =====================================
+      # 2️⃣ 環境変数をブランチ別に設定
+      # =====================================
       - name: Set environment (staging or prod)
         id: set-env
         run: |
           if [[ "${GITHUB_REF_NAME}" == "staging" ]]; then
             echo "ENV=stage" >> $GITHUB_ENV
-            echo "AWS_ACCOUNT_ID=389759593235" >> $GITHUB_ENV
+            echo "AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID_STAGE }}" >> $GITHUB_ENV
             echo "ECS_CLUSTER=stage-cluster" >> $GITHUB_ENV
             echo "ECS_SERVICE=stage-service" >> $GITHUB_ENV
-            echo "ROLE_ARN=arn:aws:iam::389759593235:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
+            echo "ROLE_ARN=arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_STAGE }}:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
-            echo "AWS_ACCOUNT_ID=550733172573" >> $GITHUB_ENV
+            echo "AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID_PROD }}" >> $GITHUB_ENV
             echo "ECS_CLUSTER=prod-cluster" >> $GITHUB_ENV
             echo "ECS_SERVICE=prod-service" >> $GITHUB_ENV
-            echo "ROLE_ARN=arn:aws:iam::550733172573:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
+            echo "ROLE_ARN=arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
           fi
 
-      # 3) OIDCでAWS認証
+      # =====================================
+      # 3️⃣ AWS認証（OIDC）
+      # =====================================
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 4) ECRログイン & コンテナビルド/プッシュ
+      # =====================================
+      # 4️⃣ ECRログイン・イメージビルド＆プッシュ
+      # =====================================
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image
+      - name: Build, tag, and push Docker image
         run: |
           IMAGE_TAG=$(date +%Y%m%d%H%M%S)
           ECR_REPO="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ENV}-ecr"
@@ -61,18 +69,24 @@ jobs:
           docker push ${ECR_REPO}:${IMAGE_TAG}
           echo "IMAGE_URI=${ECR_REPO}:${IMAGE_TAG}" >> $GITHUB_ENV
 
-      # 5) envsubst を用意（テンプレ展開で使用）
+      # =====================================
+      # 5️⃣ envsubst のインストール
+      # =====================================
       - name: Install envsubst
         run: sudo apt-get update && sudo apt-get install -y gettext-base
 
-      # 6) タスク定義テンプレを展開（リポジトリ: task/task-definition.json）
+      # =====================================
+      # 6️⃣ タスク定義テンプレートを展開
+      # =====================================
       - name: Render ECS task definition
         run: |
           envsubst < task/task-definition.json > task/ecs-task.json
-          echo "Task definition rendered:"
+          echo "Rendered task definition:"
           cat task/ecs-task.json
 
-      # 7) タスク定義を登録
+      # =====================================
+      # 7️⃣ タスク定義を登録
+      # =====================================
       - name: Register ECS task definition
         id: register-task
         run: |
@@ -81,9 +95,11 @@ jobs:
             --query "taskDefinition.taskDefinitionArn" \
             --output text)
           echo "TASK_DEF_ARN=${TASK_DEF_ARN}" >> $GITHUB_ENV
-          echo "Registered Task Definition: ${TASK_DEF_ARN}"
+          echo "✅ Registered Task Definition: ${TASK_DEF_ARN}"
 
-      # 8) サービス更新（強制デプロイ）
+      # =====================================
+      # 8️⃣ ECSサービスを更新（デプロイ実行）
+      # =====================================
       - name: Update ECS service
         run: |
           aws ecs update-service \
@@ -91,9 +107,14 @@ jobs:
             --service ${ECS_SERVICE} \
             --task-definition ${TASK_DEF_ARN} \
             --force-new-deployment
+          echo "🚀 ECS service update triggered."
 
-      # 9) 安定化待ち（任意だが推奨）
-      - name: Wait for service stability
+      # =====================================
+      # 9️⃣ デプロイ安定化を確認
+      # =====================================
+      - name: Wait for ECS service stability
         run: |
+          echo "⏳ Waiting for service to stabilize..."
           aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
           aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE}
+          echo "✅ Deployment successful!"
