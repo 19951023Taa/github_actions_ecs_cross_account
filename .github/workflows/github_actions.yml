@@ -36,13 +36,13 @@ jobs:
             echo "AWS_ACCOUNT_ID=389759593235" >> $GITHUB_ENV
             echo "ECS_CLUSTER=stage-cluster" >> $GITHUB_ENV
             echo "ECS_SERVICE=stage-service" >> $GITHUB_ENV
-            echo "ROLE_ARN=arn:aws:iam::389759593235:role/github-actions-ecs-deploy-role" >> $GITHUB_ENV
+            echo "ROLE_ARN=arn:aws:iam::389759593235:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
           else
             echo "ENV=prod" >> $GITHUB_ENV
             echo "AWS_ACCOUNT_ID=550733172573" >> $GITHUB_ENV
             echo "ECS_CLUSTER=prod-cluster" >> $GITHUB_ENV
             echo "ECS_SERVICE=prod-service" >> $GITHUB_ENV
-            echo "ROLE_ARN=arn:aws:iam::550733172573:role/github-actions-ecs-deploy-role" >> $GITHUB_ENV
+            echo "ROLE_ARN=arn:aws:iam::550733172573:role/tastylog-dev-githubactions-role" >> $GITHUB_ENV
           fi
 
       # ===========================================
